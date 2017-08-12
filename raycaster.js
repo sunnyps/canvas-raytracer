@@ -1,8 +1,28 @@
 'use strict';
 
+function randomInUnitSphere() {
+  var r = [0, 0, 0];
+  do {
+    r = [Math.random(), Math.random(), Math.random()];
+    vec3.scale(r, r, 2);
+    vec3.subtract(r, r, [1, 1, 1]);
+  } while (vec3.squaredLength(r) >= 1);
+  return r;
+}
+
+function reflect(v, n) {
+  var p = vec3.dot(v, n);
+  var b = [0, 0, 0];
+  vec3.scale(b, n, 2 * p);
+  var r = [0, 0, 0];
+  vec3.subtract(r, v, b);
+  return r;
+}
+
 function Ray(origin, direction) {
   this.origin = origin;
   this.direction = direction;
+  vec3.normalize(this.direction, direction);
 }
 
 Ray.prototype.point = function(t) {
@@ -11,9 +31,45 @@ Ray.prototype.point = function(t) {
   return point;  
 };
 
-function Sphere(center, radius) {
+function Lambertian(albedo) {
+  this.albedo = albedo;
+}
+
+Lambertian.prototype.scatter = function(ray, hit_record) {
+  var direction = [0, 0, 0];
+  vec3.add(direction, hit_record.normal, randomInUnitSphere());
+  return {
+    scattered: true,
+    ray: new Ray(hit_record.point, direction),
+    attenuation: this.albedo
+  };
+};
+
+function Metal(albedo) {
+  this.albedo = albedo;
+}
+
+Metal.prototype.scatter = function(ray, hit_record) {
+  var reflected = reflect(ray.direction, hit_record.normal);
+  if (vec3.dot(reflected, hit_record.normal) > 0) {
+    return {
+      scattered: true,
+      ray: new Ray(hit_record.point, reflected),
+      attenuation: this.albedo
+    }
+  } else {
+    return {
+      scattered: false,
+      ray: new Ray([0, 0, 0], [0, 0, 0]),
+      attenuation: [0, 0, 0]
+    }
+  }
+}
+
+function Sphere(center, radius, material) {
   this.center = center;
   this.radius = radius;
+  this.material = material;
 }
 
 Sphere.prototype.hitTest = function(ray, t_min, t_max) {
@@ -27,7 +83,8 @@ Sphere.prototype.hitTest = function(ray, t_min, t_max) {
     hit: false,
     t: 0,
     point: [0, 0, 0],
-    normal: [0, 0, 0]
+    normal: [0, 0, 0],
+    material: null
   };
   if (discriminant > 0) {
     var t = (-b - Math.sqrt(discriminant)) / (2*a);
@@ -37,6 +94,7 @@ Sphere.prototype.hitTest = function(ray, t_min, t_max) {
       hit_record.point = ray.point(t);
       vec3.subtract(hit_record.normal, hit_record.point, this.center);
       vec3.normalize(hit_record.normal, hit_record.normal);
+      hit_record.material = this.material;
       return hit_record;
     }
     t = (-b + Math.sqrt(discriminant)) / (2*a);
@@ -46,6 +104,7 @@ Sphere.prototype.hitTest = function(ray, t_min, t_max) {
       hit_record.point = ray.point(t);
       vec3.subtract(hit_record.normal, hit_record.point, this.center);
       vec3.normalize(hit_record.normal, hit_record.normal);
+      hit_record.material = this.material;
       return hit_record;
     }
   }
@@ -85,24 +144,19 @@ Camera.prototype.getRay = function(u, v) {
   return new Ray(this.origin, direction);
 }
 
-function randomInUnitSphere() {
-  var r = [0, 0, 0];
-  do {
-    r = [Math.random(), Math.random(), Math.random()];
-    vec3.scale(r, r, 2);
-    vec3.subtract(r, r, [1, 1, 1]);
-  } while (vec3.squaredLength(r) >= 1);
-  return r;
-}
-
-function getColor(ray, world) {
+function getColor(ray, world, depth) {
   var hit_record = world.hitTest(ray, 0.001, Number.MAX_VALUE);
   if (hit_record.hit) {
-    var randomDirection = [0, 0, 0]
-    vec3.add(randomDirection, hit_record.normal, randomInUnitSphere());
-    var color = getColor(new Ray(hit_record.point, randomDirection), world);
-    vec3.scale(color, color, 0.5);
-    return color;
+    if (depth >= 50)
+      return [0, 0, 0];
+    var scatter_record = hit_record.material.scatter(ray, hit_record);
+    if (scatter_record.scattered) {
+      var color = getColor(scatter_record.ray, world, depth + 1);
+      vec3.multiply(color, color, scatter_record.attenuation);
+      return color;
+    } else {
+      return [0, 0, 0];
+    }
   }
   var unit_direction = [0, 0, 0];
   vec3.normalize(unit_direction, ray.direction);
@@ -124,8 +178,10 @@ function draw() {
   var numSamples = 100;
 
   var world = new HitableList(
-    new Sphere([0, 0, -1], 0.5),
-    new Sphere([0,-100.5,-1], 100));
+    new Sphere([0, 0, -1], 0.5, new Lambertian([0.8, 0.3, 0.3])),
+    new Sphere([0,-100.5,-1], 100, new Lambertian([0.8, 0.8, 0])),
+    new Sphere([1, 0, -1], 0.5, new Metal([0.8, 0.6, 0.2])),
+    new Sphere([-1, 0, -1], 0.5, new Metal([0.8, 0.8, 0.8])));
 
   for (var j = 0; j < imageData.height; j++) {
     for (var i = 0; i < imageData.width; i++) {
@@ -133,7 +189,7 @@ function draw() {
       for (var s = 0; s < numSamples; s++) {
         var u = (i + Math.random()) / imageData.width;
         var v = (j + Math.random()) / imageData.height;
-        vec3.add(color, color, getColor(camera.getRay(u, v), world));
+        vec3.add(color, color, getColor(camera.getRay(u, v), world, 0));
       }
       vec3.scale(color, color, 1 / numSamples);
       color[0] = Math.sqrt(color[0]);
