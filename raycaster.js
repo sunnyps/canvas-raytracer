@@ -10,25 +10,34 @@ function randomInUnitSphere() {
   return r;
 }
 
-function reflect(v, n) {
-  var p = vec3.dot(v, n);
-  var b = [0, 0, 0];
-  vec3.scale(b, n, 2 * p);
-  var r = [0, 0, 0];
-  vec3.subtract(r, v, b);
-  return r;
+function reflect(ray_direction, surface_normal) {
+  var r_dot_n = vec3.dot(ray_direction, surface_normal);
+  var reflected = ray_direction;
+  vec3.scaleAndAdd(reflected, ray_direction, surface_normal, -2 * r_dot_n)
+  return reflected;
+}
+
+function refract(ray_direction, surface_normal, refractive_index) {
+  var r_dot_n = vec3.dot(ray_direction, surface_normal);
+  var discriminant = 1 - refractive_index*refractive_index*(1 - r_dot_n*r_dot_n);
+  var refracted = [0, 0, 0];
+  if (discriminant > 0) {
+    vec3.scale(refracted, ray_direction, refractive_index);
+    vec3.scaleAndAdd(refracted, refracted, surface_normal, -refractive_index * r_dot_n - Math.sqrt(discriminant))
+  }
+  return refracted;
 }
 
 function Ray(origin, direction) {
   this.origin = origin;
-  this.direction = direction;
+  this.direction = [0, 0, 0];
   vec3.normalize(this.direction, direction);
 }
 
 Ray.prototype.point = function(t) {
-  var point = [0, 0, 0]; 
+  var point = [0, 0, 0];
   vec3.scaleAndAdd(point, this.origin, this.direction, t);
-  return point;  
+  return point;
 };
 
 function Lambertian(albedo) {
@@ -66,6 +75,37 @@ Metal.prototype.scatter = function(ray, hit_record) {
   }
 }
 
+function Dielectric(refractive_index) {
+  this.refractive_index = refractive_index;
+}
+
+Dielectric.prototype.scatter = function(ray, hit_record) {
+  var r_dot_n = vec3.dot(ray.direction, hit_record.normal);
+  var attenuation = [1, 1, 0];
+  var refractive_index = 1;
+  var outward_normal = [0, 0, 0];
+  var scattered = [0, 0, 0];
+  // Outgoing ray.
+  if (r_dot_n > 0) {
+    refractive_index = this.refractive_index;
+    vec3.scale(outward_normal, hit_record.normal, -1);
+  } else {
+    refractive_index = 1 / this.refractive_index;
+    outward_normal = hit_record.normal;
+  }
+  var refracted = refract(ray.direction, outward_normal, refractive_index);
+  if (vec3.squaredLength(refracted) > 0) {
+    scattered = refracted;
+  } else {
+    scattered = reflect(ray.direction, outward_normal);
+  }
+  return {
+   scattered: true,
+   ray: new Ray(hit_record.point, scattered),
+   attenuation: attenuation
+ }
+}
+
 function Sphere(center, radius, material) {
   this.center = center;
   this.radius = radius;
@@ -73,11 +113,11 @@ function Sphere(center, radius, material) {
 }
 
 Sphere.prototype.hitTest = function(ray, t_min, t_max) {
-  var toSphere = [0, 0, 0];
-  vec3.subtract(toSphere, ray.origin, this.center);
+  var to_sphere = [0, 0, 0];
+  vec3.subtract(to_sphere, ray.origin, this.center);
   var a = vec3.dot(ray.direction, ray.direction);
-  var b = 2 * vec3.dot(ray.direction, toSphere);
-  var c = vec3.dot(toSphere, toSphere) - this.radius*this.radius;
+  var b = 2 * vec3.dot(ray.direction, to_sphere);
+  var c = vec3.dot(to_sphere, to_sphere) - this.radius*this.radius;
   var discriminant = b*b - 4*a*c;
   var hit_record = {
     hit: false,
@@ -171,40 +211,40 @@ function getColor(ray, world, depth) {
 function draw() {
   var canvas = document.getElementById('canvas');
   var ctx = canvas.getContext('2d');
-  var imageData = ctx.createImageData(canvas.width, canvas.height);
-  var data = imageData.data;
+  var image_data = ctx.createImageData(canvas.width, canvas.height);
+  var data = image_data.data;
 
   var camera = new Camera();
-  var numSamples = 100;
+  var num_samples = 100;
 
   var world = new HitableList(
     new Sphere([0, 0, -1], 0.5, new Lambertian([0.8, 0.3, 0.3])),
     new Sphere([0,-100.5,-1], 100, new Lambertian([0.8, 0.8, 0])),
     new Sphere([1, 0, -1], 0.5, new Metal([0.8, 0.6, 0.2])),
-    new Sphere([-1, 0, -1], 0.5, new Metal([0.8, 0.8, 0.8])));
+    new Sphere([-1, 0, -1], 0.5, new Dielectric(1.5)));
 
-  for (var j = 0; j < imageData.height; j++) {
-    for (var i = 0; i < imageData.width; i++) {
+  for (var j = 0; j < image_data.height; j++) {
+    for (var i = 0; i < image_data.width; i++) {
       var color = [0, 0, 0];
-      for (var s = 0; s < numSamples; s++) {
-        var u = (i + Math.random()) / imageData.width;
-        var v = (j + Math.random()) / imageData.height;
+      for (var s = 0; s < num_samples; s++) {
+        var u = (i + Math.random()) / image_data.width;
+        var v = (j + Math.random()) / image_data.height;
         vec3.add(color, color, getColor(camera.getRay(u, v), world, 0));
       }
-      vec3.scale(color, color, 1 / numSamples);
+      vec3.scale(color, color, 1 / num_samples);
       color[0] = Math.sqrt(color[0]);
       color[1] = Math.sqrt(color[1]);
       color[2] = Math.sqrt(color[2]);
       vec3.scale(color, color, 255);
 
-      var idx = (j * imageData.width + i) * 4;
+      var idx = (j * image_data.width + i) * 4;
       data[idx] = color[0];
       data[idx+1] = color[1];
       data[idx+2] = color[2];
       data[idx+3] = 255; // alpha
     }
   }
-  ctx.putImageData(imageData, 0, 0);
+  ctx.putImageData(image_data, 0, 0);
 }
 
 document.addEventListener('DOMContentLoaded', draw);
